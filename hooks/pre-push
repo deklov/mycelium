@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# Local pre-push checks for the Mycelium repo (DESIGN 8.2). Installed by
+# launch.sh with `git config core.hooksPath hooks`. A soft guarantee: readers
+# validate everything again, so a push made with --no-verify cannot mislead.
+#
+# - Claims branch: claim files are well formed, posted by the pushing agent,
+#   only edited by their owner, and deleted only by their owner or when they
+#   are stale, finished or malformed.
+# - Notes branch: only strategy.md and new board/<note_id>.md files.
+# - Never delete or force-push the claims or notes branch.
+# - Exploring agents (MYCELIUM_MODE=exploring) push nothing else here.
+
+source "$(dirname "$0")/../scripts/lib/common.sh"
+set +e
+
+fail() { echo "mycelium pre-push: $*" >&2; exit 1; }
+EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+load_agent
+
+while read -r lref lsha rref rsha; do
+  [ -n "$rref" ] || continue
+  case "$rref" in
+    refs/heads/mycelium/*/claims|refs/heads/mycelium/*/notes)
+      run="${rref#refs/heads/mycelium/}"; run="${run%/*}"
+      kind="${rref##*/}"
+      [ "$lsha" != "$ZERO_SHA" ] || fail "never delete $rref"
+      if [ "$rsha" != "$ZERO_SHA" ]; then
+        # Unknown remote commit: someone pushed since our fetch. Git itself
+        # rejects that as "fetch first" unless forced; let it report the race.
+        git cat-file -e "$rsha^{commit}" 2>/dev/null || continue
+        git merge-base --is-ancestor "$rsha" "$lsha" \
+          || fail "refusing a non-fast-forward (force) push to $rref; fetch and rebuild your change"
+        base="$rsha"
+      else
+        base="$EMPTY_TREE"
+      fi
+      export MYCELIUM_RUN_ID="$run"
+      load_run
+      if [ "$kind" = notes ]; then
+        git diff --name-status --no-renames "$base" "$lsha" | while read -r st path; do
+          case "$st:$path" in
+            [AM]:strategy.md) ;;
+            A:board/*.md) ;;
+            *) echo "x"; echo "mycelium pre-push: notes branch only takes strategy.md and new board/<note_id>.md files (got $st $path)" >&2 ;;
+          esac
+        done | grep -q x && exit 1
+        continue
+      fi
+      # claims
+      done_ids=" $(done_claims 2>/dev/null | tr '\n' ' ') "
+      t_now="$(now)"
+      changes="$(git diff --name-status --no-renames "$base" "$lsha")"
+      while read -r st path; do
+        [ -n "$st" ] || continue
+        case "$path" in claims/*.md) ;; *) fail "claims branch only holds claims/<claim_id>.md (got $path)" ;; esac
+        id="$(basename "$path" .md)"
+        if [ "$st" != D ]; then
+          new="$(git show "$lsha:$path" | parse_claim "$id")"
+          p="$(printf '%s' "$new" | cut -f8)"
+          [ -z "$p" ] || fail "claim $id is malformed: $p"
+          owner="$(printf '%s' "$new" | cut -f3)"
+          [ "$owner" = "$AGENT_ID" ] || fail "claim $id names agent $owner, but you are $AGENT_ID"
+          if [ "$st" = M ]; then
+            old_owner="$(git show "$base:$path" | parse_claim "$id" | cut -f3)"
+            [ "$old_owner" = "$AGENT_ID" ] || fail "claim $id belongs to $old_owner; only its owner may change it"
+          fi
+        else
+          old="$(git show "$base:$path" | parse_claim "$id")"
+          owner="$(printf '%s' "$old" | cut -f3)"
+          [ "$owner" != "$AGENT_ID" ] || continue
+          [ -z "$(printf '%s' "$old" | cut -f8)" ] || continue           # malformed
+          case "$done_ids" in *" $id "*) continue ;; esac                # finished
+          ckind="$(printf '%s' "$old" | cut -f2)"; renewed="$(printf '%s' "$old" | cut -f6)"
+          [ $((t_now - renewed)) -gt "$(claim_timeout "$ckind")" ] && continue   # stale
+          fail "claim $id belongs to $owner and is still live; you may only remove your own, stale, finished or malformed claims"
+        fi
+      done <<EOF
+$changes
+EOF
+      ;;
+    *)
+      if [ "${MYCELIUM_MODE:-}" = exploring ]; then
+        fail "exploring agents only push the claims and notes branches to the Mycelium repo (not $rref)"
+      fi
+      ;;
+  esac
+done
+exit 0

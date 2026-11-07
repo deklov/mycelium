@@ -1,0 +1,64 @@
+# Mycelium run configuration. Filled in during onboarding (see CLAUDE.md).
+# Flat `key: value` lines and simple `- item` lists only; keys are snake_case.
+
+# The run: one exploration campaign. snake_case, e.g. perf_2026_11.
+run_id: ""
+
+# Score direction: higher | lower
+direction: higher
+
+# Differences smaller than this are noise (measured during onboarding by
+# scoring the baseline several times). Used for improved/no_improvement and
+# for verification.
+noise_threshold: 0
+# absolute: noise_threshold is in score units. relative: it is a fraction of the
+# score (0.05 = 5%); use this when the noise grows with the score, e.g. for
+# speedups, times or throughputs.
+noise_mode: absolute
+
+# Per-evaluation budget, passed to score.sh as MYCELIUM_BUDGET_SECONDS.
+# evaluate.sh kills score.sh after eval_timeout_seconds (default 2x budget).
+eval_budget_seconds: 300
+# eval_timeout_seconds: 600
+# evaluate.sh runs score.sh this many times and records the median (the
+# timeout applies to each run). 1 if the score is deterministic.
+eval_repeats: 3
+
+# Seed and data version, passed to score.sh and recorded in every node.
+seed: 1234
+data_version: ""
+
+# Claims expire when not renewed for this long (default 3x the budget).
+# Per-kind overrides: claim_timeout_<kind>_seconds, e.g. claim_timeout_verify_seconds.
+# claim_timeout_seconds: 900
+
+# An agent writes new strategy notes every this many nodes.
+strategy_every: 20
+
+# Stopping conditions for launch.sh (empty = unlimited).
+max_experiments_per_agent: ""
+max_hours: ""
+# A headless agent iteration is killed after this long.
+iteration_timeout_seconds: 3600
+# Before every verify_every-th iteration, launch.sh verifies the best other
+# agent's node that is unverified (among the top verify_top, plus root).
+# 0 disables automatic verification.
+verify_every: 1
+verify_top: 5
+
+# Target files no node may change (shell patterns; `*` also matches `/`).
+# evaluate.sh restores them from the root before scoring, record.sh refuses
+# changes to them, and readers mark violating nodes invalid.
+protected_paths:
+#  - "bench/*"
+
+# Build outputs in the target that must never be recorded in nodes (gitignore
+# patterns, added to the target's .git/info/exclude by checkout.sh). record.sh
+# also refuses new binary files unless --allow-binary is given.
+ignore_paths:
+#  - "build/"
+
+# The target repository (informational; the submodule URL is authoritative).
+target_upstream: ""
+target_fork: ""
+target_baseline: ""
